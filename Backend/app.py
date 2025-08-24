@@ -11,7 +11,7 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-
+import feedparser
 # -------------------------------
 # Config (ENV VARS)
 # -------------------------------
@@ -95,6 +95,42 @@ SECTION_RULES = {
         "keywords": ["application", "use case", "usecase", "applied", "utilized", "deployment", "example"]
     },
 }
+def sectionize(text: str) -> Dict[str, List[str]]:
+    """
+    Break text into categorized sections using SECTION_RULES.
+    Ensures overview sentences don't leak into features/advantages/etc.
+    """
+    sections = {k: [] for k in SECTION_RULES.keys()}
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+
+    for sent in sentences:
+        lower = sent.lower()
+        matched = False
+        for sec, cfg in SECTION_RULES.items():
+            if any(kw in lower for kw in cfg["keywords"]):
+                if sent not in sections[sec]:
+                    sections[sec].append(sent.strip())
+                matched = True
+                break
+
+        # 🚫 IMPORTANT CHANGE:
+        # Do not force unmatched (neutral) sentences into "features"
+        # → prevents Overview duplication.
+        # Just skip them instead.
+
+    # Clean: remove very short junk & duplicates
+    for sec in sections:
+        seen = set()
+        cleaned = []
+        for s in sections[sec]:
+            if len(s.split()) > 3 and s not in seen:
+                cleaned.append(s)
+                seen.add(s)
+        sections[sec] = cleaned[:8]  # keep top 8 max
+
+    return sections
+
+
 
 # -------------------------------
 # Sources: Wikipedia, arXiv, CSE + generic
@@ -150,6 +186,107 @@ def fetch_arxiv(topic: str, max_results=2, max_chars=1500) -> Dict:
     except Exception:
         return {"text": "", "url": "https://arxiv.org"}
 
+
+# -------------------------------
+# Academic Sources
+# -------------------------------
+def fetch_pubmed(topic: str, max_results=5, max_chars=2000) -> Dict:
+    """
+    Fetch abstracts from PubMed (Entrez API).
+    """
+    try:
+        url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={requests.utils.quote(topic)}&retmax={max_results}&retmode=json"
+        r = requests.get(url, timeout=15)
+        if r.status_code != 200:
+            return {"text": "", "url": "https://pubmed.ncbi.nlm.nih.gov"}
+
+        ids = r.json().get("esearchresult", {}).get("idlist", [])
+        if not ids:
+            return {"text": "", "url": "https://pubmed.ncbi.nlm.nih.gov"}
+
+        # Fetch details
+        id_str = ",".join(ids)
+        fetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={id_str}&rettype=abstract&retmode=text"
+        r2 = requests.get(fetch_url, timeout=15)
+        text = clean_text(r2.text)[:max_chars]
+
+        return {"text": text, "url": "https://pubmed.ncbi.nlm.nih.gov"}
+    except Exception:
+        return {"text": "", "url": "https://pubmed.ncbi.nlm.nih.gov"}
+
+
+def fetch_semanticscholar(topic: str, max_results=5, max_chars=2000) -> Dict:
+    """
+    Fetch summaries from Semantic Scholar (official API).
+    """
+    try:
+        url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={requests.utils.quote(topic)}&limit={max_results}&fields=title,abstract,url"
+        r = requests.get(url, timeout=15)
+        if r.status_code != 200:
+            return {"text": "", "url": "https://www.semanticscholar.org"}
+
+        data = r.json().get("data", [])
+        abstracts = [clean_text(p.get("abstract", "")) for p in data if p.get("abstract")]
+        text = " ".join(abstracts)[:max_chars]
+        url_ref = data[0].get("url") if data else "https://www.semanticscholar.org"
+        return {"text": text, "url": url_ref}
+    except Exception:
+        return {"text": "", "url": "https://www.semanticscholar.org"}
+
+# -------------------------------
+# News Sources
+# -------------------------------
+def fetch_bbc_news(topic: str, max_results=5, max_chars=1500) -> Dict:
+    """
+    Search BBC RSS feed for relevant articles.
+    """
+    try:
+        feed = feedparser.parse("http://feeds.bbci.co.uk/news/rss.xml")
+        matches = [entry.title + " " + entry.summary for entry in feed.entries if topic.lower() in entry.title.lower()]
+        text = " ".join(matches[:max_results])[:max_chars]
+        return {"text": text, "url": "https://www.bbc.com/news"}
+    except Exception:
+        return {"text": "", "url": "https://www.bbc.com/news"}
+
+# -------------------------------
+# Tech Sources
+# -------------------------------
+def fetch_hackernews(topic: str, max_results=5, max_chars=1500) -> Dict:
+    """
+    Fetch Hacker News posts using Algolia API.
+    """
+    try:
+        url = f"https://hn.algolia.com/api/v1/search?query={requests.utils.quote(topic)}&hitsPerPage={max_results}"
+        r = requests.get(url, timeout=15)
+        if r.status_code != 200:
+            return {"text": "", "url": "https://news.ycombinator.com"}
+
+        hits = r.json().get("hits", [])
+        snippets = [h.get("title", "") + " " + str(h.get("url", "")) for h in hits]
+        text = " ".join(snippets)[:max_chars]
+        return {"text": text, "url": "https://news.ycombinator.com"}
+    except Exception:
+        return {"text": "", "url": "https://news.ycombinator.com"}
+
+
+def fetch_stackoverflow(topic: str, max_results=5, max_chars=1500) -> Dict:
+    """
+    Fetch StackOverflow Q&A via official API.
+    """
+    try:
+        url = f"https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=relevance&q={requests.utils.quote(topic)}&site=stackoverflow&pagesize={max_results}"
+        r = requests.get(url, timeout=15)
+        if r.status_code != 200:
+            return {"text": "", "url": "https://stackoverflow.com"}
+
+        items = r.json().get("items", [])
+        snippets = [i.get("title", "") for i in items]
+        text = " ".join(snippets)[:max_chars]
+        url_ref = items[0].get("link") if items else "https://stackoverflow.com"
+        return {"text": text, "url": url_ref}
+    except Exception:
+        return {"text": "", "url": "https://stackoverflow.com"}
+
 def google_cse_search(query: str, num=5) -> List[Dict]:
     try:
         url = (
@@ -191,17 +328,32 @@ def find_and_scrape_blog(topic: str) -> Dict:
 # -------------------------------
 # Async collector
 # -------------------------------
-def collect_sources(topic: str, selected: Set[str], max_chars=3000) -> Tuple[List[str], List[Dict]]:
+def collect_sources(topic: str, selected: set, max_chars=3000):
+    """
+    Fetch selected sources in parallel. Returns (chunks, sources_used).
+    """
     tasks = []
-    chunks, sources_used = [], []
-    with ThreadPoolExecutor(max_workers=3) as ex:
+    with ThreadPoolExecutor(max_workers=5) as executor:
         if "wikipedia" in selected:
-            tasks.append(("Wikipedia", ex.submit(scrape_wikipedia, topic, max_chars)))
+            tasks.append(("Wikipedia", executor.submit(scrape_wikipedia, topic, max_chars)))
         if "arxiv" in selected:
-            tasks.append(("arXiv", ex.submit(fetch_arxiv, topic, max_chars // 2)))
+            tasks.append(("arXiv", executor.submit(fetch_arxiv, topic, max_chars // 2)))
         if "blog" in selected:
-            tasks.append(("Blog", ex.submit(find_and_scrape_blog, topic)))
+            tasks.append(("Blog", executor.submit(find_and_scrape_blog, topic)))
 
+        # New integrations
+        if "pubmed" in selected:
+            tasks.append(("PubMed", executor.submit(fetch_pubmed, topic)))
+        if "semanticscholar" in selected:
+            tasks.append(("Semantic Scholar", executor.submit(fetch_semanticscholar, topic)))
+        if "bbc" in selected:
+            tasks.append(("BBC", executor.submit(fetch_bbc_news, topic)))
+        if "hackernews" in selected:
+            tasks.append(("Hacker News", executor.submit(fetch_hackernews, topic)))
+        if "stackoverflow" in selected:
+            tasks.append(("StackOverflow", executor.submit(fetch_stackoverflow, topic)))
+
+        chunks, sources_used = [], []
         for name, fut in tasks:
             try:
                 res = fut.result()
@@ -211,6 +363,7 @@ def collect_sources(topic: str, selected: Set[str], max_chars=3000) -> Tuple[Lis
             except Exception as e:
                 print(f"[collect_sources] {name} error: {e}")
     return chunks, sources_used
+
 
 # -------------------------------
 # Models (lazy load)
@@ -235,7 +388,12 @@ def summarize(text: str, max_len=180, min_len=60) -> str:
     load_models()
     out = _summarizer(text, max_length=max_len, min_length=min_len, do_sample=False)
     return out[0]["summary_text"]
-
+def is_greeting_or_smalltalk(query: str) -> bool:
+    q = query.lower().strip()
+    greetings = {"hi", "hello", "hey", "yo", "sup", "good morning", "good evening", "good afternoon"}
+    if q in greetings or any(q.startswith(g) for g in greetings):
+        return True
+    return False
 # -------------------------------
 # Guideline logic: intent → sections
 # -------------------------------
@@ -268,25 +426,7 @@ def infer_intent(query: str) -> Set[str]:
     # Default (broad) if nothing matched
     return {"overview", "features", "advantages", "disadvantages", "applications"}
 
-def sectionize(text: str) -> Dict[str, List[str]]:
-    """Split a general summary into sentence buckets using keyword weighting."""
-    sents = sent_split(text)
-    buckets = {k: [] for k in ["features", "advantages", "disadvantages", "applications"]}
-    for s in sents:
-        ls = s.lower()
-        matched = False
-        for section, rule in SECTION_RULES.items():
-            if any(kw in ls for kw in rule["keywords"]):
-                buckets[section].append(s)
-                matched = True
-        if not matched:
-            # neutral sentences lean to 'features'
-            buckets["features"].append(s)
 
-    # Clean up / dedupe / trim length
-    for k in buckets:
-        buckets[k] = dedupe_keep_order(buckets[k])[:8]
-    return buckets
 
 # -------------------------------
 # Cache helpers
@@ -332,6 +472,7 @@ def summarize_endpoint():
         return jsonify({"ok": False, "error": "topic is required"}), 400
 
         # Special case: self-introduction (don’t scrape, answer directly)
+        
     if is_self_query(query):
         session_id = data.get("session_id", str(int(time.time() * 1000)))
         response_sections = {
