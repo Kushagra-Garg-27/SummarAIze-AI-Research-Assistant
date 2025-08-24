@@ -22,7 +22,6 @@ function App() {
     setInput("");
 
     try {
-      // Flask backend call
       const response = await fetch("http://127.0.0.1:8000/summarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -33,43 +32,52 @@ function App() {
 
       if (data.ok) {
         const { sections } = data;
-        let botReply = "";
+        const newMessages = [];
 
         if (sections.overview) {
-          botReply += `📌 Overview:\n${sections.overview}\n\n`;
+          newMessages.push({
+            sender: "bot",
+            text: `📌 **Overview**\n${sections.overview}`,
+          });
         }
         if (sections.features?.length) {
-          botReply += `✨ Features:\n${sections.features
-            .map((f) => `- ${f}`)
-            .join("\n")}\n\n`;
+          newMessages.push({
+            sender: "bot",
+            text: `✨ **Features**\n${sections.features
+              .map((f) => `- ${f}`)
+              .join("\n")}`,
+          });
         }
         if (sections.advantages?.length) {
-          botReply += `✅ Advantages:\n${sections.advantages
-            .map((a) => `- ${a}`)
-            .join("\n")}\n\n`;
+          newMessages.push({
+            sender: "bot",
+            text: `✅ **Advantages**\n${sections.advantages
+              .map((a) => `- ${a}`)
+              .join("\n")}`,
+          });
         }
         if (sections.disadvantages?.length) {
-          botReply += `⚠️ Disadvantages:\n${sections.disadvantages
-            .map((d) => `- ${d}`)
-            .join("\n")}\n\n`;
+          newMessages.push({
+            sender: "bot",
+            text: `⚠️ **Disadvantages**\n${sections.disadvantages
+              .map((d) => `- ${d}`)
+              .join("\n")}`,
+          });
         }
         if (sections.applications?.length) {
-          botReply += `💡 Applications:\n${sections.applications
-            .map((app) => `- ${app}`)
-            .join("\n")}\n\n`;
+          newMessages.push({
+            sender: "bot",
+            text: `💡 **Applications**\n${sections.applications
+              .map((app) => `- ${app}`)
+              .join("\n")}`,
+          });
         }
 
-        setMessages((prev) => [
-          ...prev,
-          { sender: "bot", text: botReply.trim() || "No details found." },
-        ]);
+        setMessages((prev) => [...prev, ...newMessages]);
       } else {
         setMessages((prev) => [
           ...prev,
-          {
-            sender: "bot",
-            text: "⚠️ Error: No valid response from backend.",
-          },
+          { sender: "bot", text: "⚠️ Error: No valid response from backend." },
         ]);
       }
     } catch (error) {
@@ -111,7 +119,7 @@ function App() {
                 ))}
               </div>
             </div>
-            <div className="p-4 border-t text-gray-500">Username</div>
+            <div className="p-4 border-t text-gray-500">Kushagra</div>
           </motion.div>
         )}
       </AnimatePresence>

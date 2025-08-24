@@ -4,7 +4,7 @@ Write-Host "🔍 Verifying frontend setup..."
 $gitConfig = git config -f .gitmodules --get-regexp submodule.frontend.url 2>$null
 
 if ($gitConfig) {
-    Write-Host "⚠️ frontend is still a submodule. Fixing..."
+    Write-Host " frontend is still a submodule. Fixing..."
 
     # Deinit the submodule
     git submodule deinit -f frontend
@@ -21,7 +21,7 @@ if ($gitConfig) {
     git commit -m "Fix: convert frontend from submodule to normal folder"
     git push origin main
 
-    Write-Host "✅ frontend is now a normal folder and changes pushed to GitHub."
+    Write-Host " frontend is now a normal folder and changes pushed to GitHub."
 } else {
-    Write-Host "✅ frontend is already a normal folder. Nothing to fix."
+    Write-Host " frontend is already a normal folder. Nothing to fix."
 }
